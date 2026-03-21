@@ -1,0 +1,17 @@
+{
+  "generatedAt": "2026-03-02T09:26:57.376Z",
+  "results": [
+    {
+      "dat": "D:\\Drone_Data\\Drone_Data\\DATFile\\FLY002.DAT",
+      "outputs": [
+        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002.DAT.csv",
+        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002.DAT.kml",
+        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002-tombstone.txt"
+      ],
+      "gpsPoints": null,
+      "candidate": "datcon",
+      "candidateTrusted": true,
+      "inputSize": 203574001
+    }
+  ]
+}

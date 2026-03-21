@@ -1,0 +1,48 @@
+{
+  "name": "PAC_drone_assistant",
+  "version": "1.0.0",
+  "description": "An Electron application with React",
+  "main": "./out/main/index.js",
+  "author": "PAC",
+  "homepage": "https://electron-vite.org",
+  "scripts": {
+    "make:icon": "node scripts/make-icon.mjs",
+    "dl:desktop": "node scripts/download-to-desktop.mjs",
+    "format": "prettier --write .",
+    "lint": "eslint --cache .",
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run make:icon && npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux"
+  },
+  "dependencies": {
+    "@electron-toolkit/preload": "^3.0.2",
+    "@electron-toolkit/utils": "^4.0.0",
+    "basic-ftp": "^5.2.0",
+    "drivelist": "^12.0.2",
+    "serialport": "^13.0.0",
+    "usb": "^2.17.0"
+  },
+  "devDependencies": {
+    "@electron-toolkit/eslint-config": "^2.0.0",
+    "@electron-toolkit/eslint-config-prettier": "^3.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^37.2.3",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^4.0.0",
+    "eslint": "^9.31.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "png-to-ico": "^2.1.8",
+    "prettier": "^3.6.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sharp": "^0.34.3",
+    "vite": "^7.0.5"
+  }
+}

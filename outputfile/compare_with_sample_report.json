@@ -1,0 +1,32 @@
+{
+  "comparedAt": "2026-03-02T04:48:32.417Z",
+  "file": "FLY002",
+  "sizeBytes": {
+    "generated": {
+      "csv": 2072669,
+      "kml": 101290,
+      "tombstone": 293081
+    },
+    "sample": {
+      "csv": 1365288,
+      "kml": 1828,
+      "tombstone": 41997
+    }
+  },
+  "csv": {
+    "generatedRows": 30000,
+    "sampleRows": 21229,
+    "generatedGpsRows": 3327,
+    "sampleGpsRows": 0
+  },
+  "kml": {
+    "generatedCoordinateTokens": 3748,
+    "sampleCoordinateTokens": 0
+  },
+  "tombstone": {
+    "generatedHasRawTextSection": true,
+    "sampleHasRawTextSection": true,
+    "generatedHasGpsCandidate": true,
+    "sampleHasGpsCandidate": false
+  }
+}
