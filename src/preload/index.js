@@ -67,6 +67,8 @@ const api = {
   },
   // Decrypt .DAT file into csv/kml/tombstone
   decryptDat: (filePath, outputDir = null) => ipcRenderer.invoke('decrypt:dat', { filePath, outputDir }),
+  // Decrypt .DAT with DatCon-style parser from src_datcon flow
+  decryptDatCon: (filePath, outputDir = null) => ipcRenderer.invoke('decrypt:datcon', { filePath, outputDir }),
   // Open folder picker dialog (generic)
   chooseFolder: () => ipcRenderer.invoke('dialog:chooseFolder'),
   // Open folder picker and return all .DAT file paths inside

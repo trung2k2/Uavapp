@@ -66,6 +66,26 @@ export function IconDecrypt({ size = 20, color = 'currentColor' }) {
   )
 }
 
+/** DatCon-style decrypt icon */
+export function IconDatCon({ size = 20, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      {/* brackets */}
+      <path d="M4 5 H7" />
+      <path d="M4 5 V19" />
+      <path d="M4 19 H7" />
+      <path d="M20 5 H17" />
+      <path d="M20 5 V19" />
+      <path d="M20 19 H17" />
+      {/* center chip */}
+      <rect x="8.5" y="8" width="7" height="8" rx="1.5" />
+      <line x1="10" y1="10.5" x2="14" y2="10.5" />
+      <line x1="10" y1="13" x2="14" y2="13" />
+      <line x1="10" y1="15.5" x2="12.8" y2="15.5" />
+    </svg>
+  )
+}
+
 /** Large drone logo for sidebar top */
 export function IconDroneLarge({ size = 30, color = 'currentColor' }) {
   return (

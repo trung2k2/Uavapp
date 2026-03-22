@@ -831,6 +831,32 @@ function isPlausibleLatLon(lat, lon) {
   return true
 }
 
+function decryptDatPayloadV2(buffer, payloadStart, payloadLen, tickNo) {
+  const payload = Buffer.allocUnsafe(payloadLen)
+  const xorKey = tickNo & 0xff
+  for (let i = 0; i < payloadLen; i += 1) {
+    payload[i] = buffer[payloadStart + i] ^ xorKey
+  }
+  return payload
+}
+
+function decodeType12RadiansPayload(payload) {
+  if (!payload || payload.length < 16) return null
+  const lonRad = payload.readDoubleLE(0)
+  const latRad = payload.readDoubleLE(8)
+  const lon = (lonRad * 180) / Math.PI
+  const lat = (latRad * 180) / Math.PI
+  if (!isPlausibleLatLon(lat, lon)) return null
+
+  let altitude = null
+  if (payload.length >= 20) {
+    const altMaybe = payload.readFloatLE(16)
+    if (Number.isFinite(altMaybe) && altMaybe >= -1000 && altMaybe <= 12000) altitude = altMaybe
+  }
+
+  return { lat, lon, altitude }
+}
+
 function reduceKmlTrackPoints(points, targetMaxPoints = 250) {
   if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points.slice() : []
   if (points.length <= targetMaxPoints) return points.slice()
@@ -1246,11 +1272,7 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
       let source = 'v3'
 
       if (payloadLen > 0) {
-        const xorKey = tickNo & 0xff
-        const payload = Buffer.allocUnsafe(payloadLen)
-        for (let i = 0; i < payloadLen; i += 1) {
-          payload[i] = buffer[payloadStart + i] ^ xorKey
-        }
+        const payload = decryptDatPayloadV2(buffer, payloadStart, payloadLen, tickNo)
 
         // DJI DAT V3 GPS track aligns best with record type 2096.
         // Including sibling types introduces noisy duplicates and zero altitude rows.
@@ -1274,20 +1296,12 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
             numSats = sats
             altitude = point.altitude
           }
-        } else if (recordType === 12 && payloadLen >= 16) {
+        } else if (recordType === 12) {
           source = 'v3-type12'
-          const lonRad = payload.readDoubleLE(0)
-          const latRad = payload.readDoubleLE(8)
-          const lon = (lonRad * 180) / Math.PI
-          const lat = (latRad * 180) / Math.PI
-          let alt = null
-          if (payloadLen >= 20) {
-            const altMaybe = payload.readFloatLE(16)
-            if (Number.isFinite(altMaybe) && altMaybe >= -1000 && altMaybe <= 12000) alt = altMaybe
-          }
-          if (isPlausibleLatLon(lat, lon)) {
-            point = { lat, lon, altitude: alt }
-            altitude = alt
+          const decodedType12 = decodeType12RadiansPayload(payload)
+          if (decodedType12) {
+            point = decodedType12
+            altitude = decodedType12.altitude
           }
         }
 
@@ -1348,10 +1362,7 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
     coordinateCandidate = gpsPoints.length > 0 ? { recordType: 2096, encoding: 'dat-v3-gps', offset: 8 } : null
     trustedCoordinateCandidate = gpsPoints.length > 0 ? { ok: true } : null
   } else {
-    coordinateCandidate = detectBestDatCoordinateCandidate(buffer)
-    trustedCoordinateCandidate = coordinateCandidate?.isTrusted ? coordinateCandidate : null
-
-    const minRecLen = 5
+    const minRecLen = 12
     let pos = dataLen >= 256 ? 256 : 0
 
     while (pos + minRecLen <= dataLen) {
@@ -1362,23 +1373,25 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
         continue
       }
 
-      const totalLen = buffer.readUInt16LE(pos + 1)
+      const totalLen = buffer[pos + 1]
       if (totalLen < minRecLen || pos + totalLen > dataLen) {
         pos += 1
         continue
       }
 
       totalEntries += 1
-      const recordType = buffer[pos + 3]
-      const payloadStart = pos + 4
-      const payloadEnd = pos + totalLen - 1
-      const payloadLen = Math.max(0, payloadEnd - payloadStart)
-      const sampleNumber = payloadLen >= 4 ? buffer.readUInt32LE(payloadStart) : pos
-      const offsetSeconds = sampleNumber > 0 ? Math.floor(sampleNumber / 5_000_000) : 0
+      const recordType = buffer.readUInt16LE(pos + 4)
+      const tickNo = buffer.readUInt32LE(pos + 6)
+      const payloadStart = pos + 10
+      const payloadLen = totalLen - 12
+      const sampleNumber = tickNo
+      const offsetSeconds = sampleNumber > 0 ? Math.floor(sampleNumber / 600) : 0
 
-      const point = trustedCoordinateCandidate
-        ? readCandidateCoordinatePoint(buffer, payloadStart, payloadLen, recordType, trustedCoordinateCandidate)
-        : null
+      const payload = payloadLen > 0
+        ? decryptDatPayloadV2(buffer, payloadStart, payloadLen, tickNo)
+        : Buffer.alloc(0)
+
+      const point = recordType === 12 ? decodeType12RadiansPayload(payload) : null
       let latitudeField = '<nil>'
       let longitudeField = '<nil>'
       let altitudeField = '<nil>'
@@ -1401,13 +1414,12 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
       const keepRow = point || processedEntries % rowStride === 0
       if (keepRow && csvRows.length < maxCsvRows) {
         csvRows.push(
-          `${sampleNumber},<nil>,${latitudeField},${longitudeField},${altitudeField},<nil>,${gpsLevelField},<nil>,${fixField},${offsetSeconds},<nil>,${recordType},${sampleNumber},<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,heuristic`
+          `${sampleNumber},<nil>,${latitudeField},${longitudeField},${altitudeField},<nil>,${gpsLevelField},<nil>,${fixField},${offsetSeconds},<nil>,${recordType},${sampleNumber},<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,<nil>,v1-type12`
         )
       }
       processedEntries += 1
 
       if (payloadLen >= 12 && textLines.length < 8000) {
-        const payload = buffer.subarray(payloadStart, payloadEnd)
         let printable = 0
         for (const b of payload) {
           if ((b >= 32 && b <= 126) || b === 9) printable += 1
@@ -1421,6 +1433,11 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
 
       pos += totalLen
     }
+
+    coordinateCandidate = gpsPoints.length > 0
+      ? { recordType: 12, encoding: 'v1-type12-radians', offset: 0, isTrusted: true }
+      : null
+    trustedCoordinateCandidate = coordinateCandidate
   }
 
   const kmlSourcePoints = cleanKmlTrackPoints(gpsPoints)
@@ -2015,56 +2032,36 @@ app.whenReady().then(async () => {
     const stem = base.replace(/\.dat$/i, '')
     const inputStat = await fs.stat(filePath).catch(() => null)
 
-    const allNames = await fs.readdir(outDir).catch(() => [])
-    const lowerStem = stem.toLowerCase()
-
-    function findByPreferredOrPattern(preferredName, extRegex) {
-      const preferred = path.join(outDir, preferredName)
-      const hasPreferred = fs.access(preferred).then(() => true).catch(() => false)
-      return hasPreferred.then((ok) => {
-        if (ok) return preferred
-        const hit = allNames
-          .filter((name) => extRegex.test(name))
-          .find((name) => name.toLowerCase().includes(lowerStem))
-        return hit ? path.join(outDir, hit) : null
-      })
-    }
-
-    const csvPath = await findByPreferredOrPattern(`${base}.csv`, /\.csv$/i)
-    const kmlPath = await findByPreferredOrPattern(`${base}.kml`, /\.kml$/i)
-    let tombPath = await findByPreferredOrPattern(`${stem}-tombstone.txt`, /tombstone\.txt$/i)
-
-    if (!tombPath) {
-      tombPath = path.join(outDir, `${stem}-tombstone.txt`)
-      const analyzedAt = new Date().toISOString()
-      const tombText = [
-        '###############################################################################',
-        `   UAV/UAS/Drone Data Generated By Drone_Data at ${analyzedAt}`,
-        '###############################################################################',
-        '',
-        `Analyzed at:\t\t${analyzedAt}`,
-        `Input file:\t\t${filePath}`,
-        `Input size:\t\t${inputStat?.size ?? 'unknown'} bytes`,
-        `Output folder:\t\t${outDir}`,
-        ''
-      ].join('\n')
-      await fs.writeFile(tombPath, tombText, 'utf8')
-    }
-
-    if (csvPath && kmlPath) {
-      const outputs = []
-      for (const [type, fp] of [['CSV', csvPath], ['KML', kmlPath], ['TXT', tombPath]]) {
-        const stat = await fs.stat(fp).catch(() => null)
-        if (stat) outputs.push({ type, name: path.basename(fp), path: fp, size: stat.size })
-      }
-      return { outputs, inputSize: inputStat?.size ?? null }
-    }
-
-    // Process by internal DAT parser only.
+    // Always process using the new decrypt mechanism.
     try {
       return await parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputStat)
     } catch (fallbackError) {
       throw new Error(`Failed to decode ${base}. Parser error: ${String(fallbackError?.message || fallbackError)}`)
+    }
+  })
+
+  ipcMain.handle('decrypt:datcon', async (_event, payload) => {
+    const { filePath, outputDir } = payload || {}
+    if (!filePath || typeof filePath !== 'string') throw new Error('filePath required')
+
+    const outDir = outputDir && typeof outputDir === 'string' && outputDir.length > 0
+      ? outputDir
+      : path.dirname(filePath)
+
+    await fs.mkdir(outDir, { recursive: true })
+
+    const base = path.basename(filePath)
+    const stem = base.replace(/\.dat$/i, '')
+    const inputStat = await fs.stat(filePath).catch(() => null)
+
+    try {
+      const result = await parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputStat)
+      return {
+        ...result,
+        engine: 'src_datcon'
+      }
+    } catch (fallbackError) {
+      throw new Error(`Failed to decode ${base} with DatCon engine. Parser error: ${String(fallbackError?.message || fallbackError)}`)
     }
   })
 
