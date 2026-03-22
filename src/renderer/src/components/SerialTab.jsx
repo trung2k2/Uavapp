@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import packets from '../packets.js'
 
 const STATUS_ICON = { idle: '○', waiting: '⏳', processing: '⚙', done: '✓', error: '✗' }
 const STATUS_COLOR = { idle: '#6b6b6b', waiting: '#b07d00', processing: '#0062cc', done: '#1a7a3c', error: '#c0392b' }
@@ -20,6 +21,13 @@ export default function SerialTab() {
   const [sendStatus, setSendStatus] = useState('')
   const [lastResult, setLastResult] = useState(null)
   const [events, setEvents] = useState([])
+  const [selectedMode, setSelectedMode] = useState('')
+
+  // Auto periodic states
+  const [isPeriodic, setIsPeriodic] = useState(false)
+  const [periodicCount, setPeriodicCount] = useState(0)
+  const [autoPatternActive, setAutoPatternActive] = useState(false)
+  
   const packetListRef = useRef(null)
 
   useEffect(() => {
@@ -47,10 +55,39 @@ export default function SerialTab() {
       addEvent('urb-bulk-error', `URB_BULK error: ${error.message}`)
     })
 
+    const removeAutoLoopStateListener = window.api.serial.onAutoLoopState((data) => {
+      setAutoPatternActive(!!data?.active)
+      setIsPeriodic(!!data?.active)
+      if (typeof data?.cycles === 'number') {
+        setPeriodicCount(data.cycles)
+      }
+    })
+
+    const removeAutoLoopTickListener = window.api.serial.onAutoLoopTick((data) => {
+      if (data?.tag) {
+        addEvent('urb-bulk-sent', `[AUTO] ${data.tag}`)
+      }
+    })
+
+    const removeAutoLoopErrorListener = window.api.serial.onAutoLoopError((error) => {
+      addEvent('error', `Auto loop send error: ${error?.message || 'Unknown error'}`)
+    })
+
+    window.api.serial.getAutoLoopStatus().then((status) => {
+      setAutoPatternActive(!!status?.active)
+      setIsPeriodic(!!status?.active)
+      if (typeof status?.cycles === 'number') {
+        setPeriodicCount(status.cycles)
+      }
+    }).catch(() => {})
+
     return () => {
       removeDataListener?.()
       removeUrbBulkSentListener?.()
       removeUrbBulkErrorListener?.()
+      removeAutoLoopStateListener?.()
+      removeAutoLoopTickListener?.()
+      removeAutoLoopErrorListener?.()
     }
   }, [showOnlySentPackets])
 
@@ -90,6 +127,7 @@ export default function SerialTab() {
 
   async function disconnect() {
     try {
+      await stopAutoPatternLoop()
       await window.api.serial.disconnect()
       setIsConnected(false)
       setConnectionStatus('disconnected')
@@ -182,6 +220,84 @@ export default function SerialTab() {
     }
   }
 
+  async function sendModePackets() {
+    if (!selectedMode || !packets[selectedMode]) {
+      setSendStatus('No mode selected or no packets defined')
+      return
+    }
+
+    if (!isConnected) {
+      setSendStatus('Not connected')
+      return
+    }
+
+    try {
+      const modePackets = packets[selectedMode]
+      setSendStatus(`Sending ${modePackets.length} packets for ${selectedMode}...`)
+
+      const results = []
+      for (let i = 0; i < modePackets.length; i++) {
+        const hexData = modePackets[i]
+        setSendStatus(`Sending packet ${i + 1}/${modePackets.length}...`)
+
+        const result = await window.api.serial.sendUrbBulk(hexData)
+        results.push(result)
+        addEvent('urb-bulk-sent', `Sent ${selectedMode} packet ${i + 1}/${modePackets.length} to ${result.fullEndpointHex || 'default endpoint'}`)
+
+        // Add delay between packets
+        if (i < modePackets.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 200))
+        }
+      }
+
+      setSendStatus(`Sent ${results.length} packets for ${selectedMode} successfully`)
+      addEvent('mode-sent', `Completed sending ${results.length} packets for ${selectedMode}`)
+
+      if (selectedMode === 'get-device-info') {
+        await startAutoPatternLoop()
+      }
+    } catch (error) {
+      setSendStatus('error')
+      addEvent('error', `Send mode packets failed: ${error.message}`)
+    }
+  }
+
+  async function startAutoPatternLoop() {
+    if (!isConnected) {
+      return
+    }
+
+    const heartbeatPackets = packets['heartbeat-log-message'] || []
+    const versionPackets = packets['version-inquiry'] || []
+
+    if (!heartbeatPackets.length || !versionPackets.length) {
+      addEvent('error', 'Missing heartbeat-log-message or version-inquiry packets')
+      return
+    }
+
+    try {
+      await window.api.serial.startAutoLoop(heartbeatPackets, versionPackets, 200)
+      setPeriodicCount(0)
+      addEvent('periodic', 'Auto loop started in backend: every 200ms, 7 heartbeat-log-message then 1 version-inquiry')
+    } catch (error) {
+      addEvent('error', `Start auto loop failed: ${error.message}`)
+    }
+  }
+
+  async function stopAutoPatternLoop() {
+    try {
+      const status = await window.api.serial.stopAutoLoop()
+      setAutoPatternActive(false)
+      setIsPeriodic(false)
+      if (typeof status?.cycles === 'number') {
+        setPeriodicCount(status.cycles)
+      }
+      addEvent('periodic', `Auto loop stopped (${status?.cycles ?? periodicCount} full cycles: 7 heartbeat + 1 version)`)
+    } catch (error) {
+      addEvent('error', `Stop auto loop failed: ${error.message}`)
+    }
+  }
+
   return (
     <div className="serial-tab">
       <div className="section">
@@ -258,10 +374,55 @@ export default function SerialTab() {
             Clear Buffer
           </button>
         </div>
-        {lastResult && (
-          <div className="result">
-            <h4>Last Result:</h4>
-            <pre>{JSON.stringify(lastResult, null, 2)}</pre>
+      </div>
+
+      <div className="section">
+        <h3>Function Packets</h3>
+        <div className="form-row">
+          <label>
+            Chọn chế độ:
+            <select
+              value={selectedMode}
+              onChange={(e) => setSelectedMode(e.target.value)}
+            >
+              <option value="">Chọn chế độ</option>
+              {['get-device-info', 'change-mode'].map(mode => (
+                <option key={mode} value={mode}>
+                  {mode.replace('-', ' ').toUpperCase()} ({packets[mode].length} packets)
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={sendModePackets}
+            disabled={!isConnected || !selectedMode}
+            className="primary"
+          >
+            Gửi
+          </button>
+        </div>
+        {selectedMode && packets[selectedMode] && (
+          <div className="packet-preview">
+            <h4>Packets for {selectedMode.replace('-', ' ').toUpperCase()}:</h4>
+            <ul>
+              {packets[selectedMode].map((packet, index) => (
+                <li key={index}>{packet}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {isPeriodic && (
+          <div style={{ marginTop: '15px', padding: '10px', backgroundColor: '#c8e6c9', borderRadius: '4px' }}>
+            <span style={{ color: '#2e7d32', fontWeight: 'bold' }}>
+              ✓ Đang gửi chu kỳ tự động mỗi 200ms ({periodicCount} chu kỳ đã gửi)
+            </span>
+          </div>
+        )}
+        {autoPatternActive && (
+          <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px' }}>
+            <span style={{ color: '#856404', fontWeight: 'bold' }}>
+              Auto pattern đang chạy: 7 heartbeat-log-message -&gt; 1 version-inquiry (200ms)
+            </span>
           </div>
         )}
       </div>
@@ -326,6 +487,8 @@ export default function SerialTab() {
           padding: 20px;
           max-width: 1200px;
           margin: 0 auto;
+          max-height: calc(100vh - 40px);
+          overflow-y: auto;
         }
 
         .section {
@@ -342,12 +505,30 @@ export default function SerialTab() {
           color: #333;
         }
 
-        .form-row {
-          display: flex;
-          gap: 10px;
-          align-items: end;
-          margin-bottom: 15px;
-          flex-wrap: wrap;
+        .packet-preview {
+          margin-top: 15px;
+          padding: 10px;
+          background: #fff;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+        }
+
+        .packet-preview h4 {
+          margin-top: 0;
+          margin-bottom: 10px;
+          color: #333;
+        }
+
+        .packet-preview ul {
+          margin: 0;
+          padding-left: 20px;
+        }
+
+        .packet-preview li {
+          font-family: monospace;
+          font-size: 12px;
+          margin-bottom: 5px;
+          word-break: break-all;
         }
 
         .form-row label {

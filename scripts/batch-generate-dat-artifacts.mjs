@@ -25,6 +25,49 @@ function isPlausibleLatLon(lat, lon) {
   return true
 }
 
+function reduceKmlTrackPoints(points, targetMaxPoints = 250) {
+  if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points.slice() : []
+  if (points.length <= targetMaxPoints) return points.slice()
+
+  function applyMinDistance(minDistance) {
+    const reduced = [points[0]]
+    let last = points[0]
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const p = points[i]
+      const d = Math.hypot(p.lat - last.lat, p.lon - last.lon)
+      if (d >= minDistance) {
+        reduced.push(p)
+        last = p
+      }
+    }
+    const lastPoint = points[points.length - 1]
+    const prev = reduced[reduced.length - 1]
+    if (prev !== lastPoint) reduced.push(lastPoint)
+    return reduced
+  }
+
+  let maxStep = 0
+  for (let i = 1; i < points.length; i += 1) {
+    const d = Math.hypot(points[i].lat - points[i - 1].lat, points[i].lon - points[i - 1].lon)
+    if (d > maxStep) maxStep = d
+  }
+
+  let lo = 0
+  let hi = Math.max(maxStep, 1e-7)
+  let best = points.slice()
+  for (let iter = 0; iter < 24; iter += 1) {
+    const mid = (lo + hi) / 2
+    const candidate = applyMinDistance(mid)
+    if (candidate.length > targetMaxPoints) lo = mid
+    else {
+      best = candidate
+      hi = mid
+    }
+  }
+
+  return best
+}
+
 function updateCoordinateTrack(track, lat, lon) {
   if (!isPlausibleLatLon(lat, lon)) return
   track.n += 1
@@ -238,8 +281,47 @@ async function generateForDat(filePath, outDir) {
   const maxGpsPoints = 25000
 
   let pos = buffer.length >= 256 ? 256 : 0
-  let totalEntries = 0
-  let processedEntries = 0
+    let totalEntries = 0
+    let processedEntries = 0
+
+    // DJI DAT V3 GPS track detection - record type 2096 only
+    if (buffer.length > 256) {
+      let v3pos = 256
+      while (v3pos + 10 <= buffer.length) {
+        if (buffer[v3pos] !== 0x55) {
+          const next = buffer.indexOf(0x55, v3pos + 1)
+          if (next < 0) break
+          v3pos = next
+          continue
+        }
+        const len = buffer.readUInt16LE(v3pos + 1)
+        if (len < 66 || v3pos + len + 7 > buffer.length) {
+          v3pos += 1
+          continue
+        }
+        const type = buffer.readUInt16LE(v3pos + 4)
+        const tickNo = buffer.readUInt32LE(v3pos + 6)
+        if (type === 2096) {
+          const key = tickNo & 0xff
+          const payload = buffer.subarray(v3pos + 10, v3pos + 10 + len)
+          const payloadCopy = Buffer.from(payload)
+          for (let i = 0; i < payloadCopy.length; i++) payloadCopy[i] ^= key
+          const lon = payloadCopy.readInt32LE(8) / 1e7
+          const lat = payloadCopy.readInt32LE(12) / 1e7
+          const alt = payloadCopy.readInt32LE(16) / 1000
+          const hdop = payloadCopy.readFloatLE(32)
+          const pdop = payloadCopy.readFloatLE(36)
+          if (isPlausibleLatLon(lat, lon) && hdop < 1000 && pdop < 1000) {
+            const point = { lat, lon, altitude: Number.isFinite(alt) ? alt : null }
+            const prev = gpsPoints[gpsPoints.length - 1]
+            if (gpsPoints.length < maxGpsPoints && (!prev || Math.hypot(prev.lat - point.lat, prev.lon - point.lon) > 1e-7)) {
+              gpsPoints.push(point)
+            }
+          }
+        }
+        v3pos += len + 7
+      }
+    }
 
   while (pos + 5 <= buffer.length) {
     if (buffer[pos] !== 0x55) {
@@ -301,11 +383,27 @@ async function generateForDat(filePath, outDir) {
     pos += totalLen
   }
 
-  const startPoint = gpsPoints[0] || null
-  const endPoint = gpsPoints.length > 0 ? gpsPoints[gpsPoints.length - 1] : null
-  const startCoordinateText = startPoint ? `${startPoint.lon.toFixed(7)},${startPoint.lat.toFixed(7)},${(startPoint.altitude ?? 0).toFixed(2)}` : ''
-  const endCoordinateText = endPoint ? `${endPoint.lon.toFixed(7)},${endPoint.lat.toFixed(7)},${(endPoint.altitude ?? 0).toFixed(2)}` : ''
-  const pathCoordinatesText = gpsPoints.map((p) => `${p.lon.toFixed(7)},${p.lat.toFixed(7)},${(p.altitude ?? 0).toFixed(2)}`).join(' ')
+  const kmlGpsPoints = reduceKmlTrackPoints(gpsPoints, 250)
+  const startPoint = kmlGpsPoints[0] || null
+  const endPoint = kmlGpsPoints.length > 0 ? kmlGpsPoints[kmlGpsPoints.length - 1] : null
+  
+    // Create rectangle markers (4 corners) for takeoff and termination to match vendor format
+    const makeRectangleCoords = (center, alt) => {
+      if (!center) return ''
+      const delta = 0.0002  // ~20 meter offset
+      const alt2 = alt.toFixed(2)
+      return [
+        `${(center.lon - delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+        `${(center.lon - delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`,
+        `${(center.lon + delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`,
+        `${(center.lon + delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+        `${(center.lon - delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`
+      ].join(' ')
+    }
+  
+    const startCoordinateText = startPoint ? makeRectangleCoords(startPoint, startPoint.altitude ?? 0) : ''
+    const endCoordinateText = endPoint ? makeRectangleCoords(endPoint, endPoint.altitude ?? 0) : ''
+  const pathCoordinatesText = kmlGpsPoints.map((p) => `${p.lon.toFixed(7)},${p.lat.toFixed(7)},${(p.altitude ?? 0).toFixed(2)}`).join(' ')
   const pathStyleId = buildKmlStyleId(base)
 
   const kmlText = [
@@ -381,8 +479,8 @@ async function generateForDat(filePath, outDir) {
     `Total entries:\t\t${totalEntries.toLocaleString()}`,
     `Processed entries:\t${processedEntries.toLocaleString()}`,
     `Takeoff Altitude:\t${startPoint?.altitude != null ? startPoint.altitude.toFixed(2) : 0}`,
-    `KML Fixed Points:\t${gpsPoints.length > 0 ? 2 : 0}`,
-    `KML Path Points:\t${gpsPoints.length}`,
+    `KML Fixed Points:\t${kmlGpsPoints.length > 0 ? 2 : 0}`,
+    `KML Path Points:\t${kmlGpsPoints.length}`,
     `Flight Start Point:\t${startPoint ? `${startPoint.lat.toFixed(7)},${startPoint.lon.toFixed(7)}` : ''}`,
     `Flight End Point:\t${endPoint ? `${endPoint.lat.toFixed(7)},${endPoint.lon.toFixed(7)}` : ''}`,
     `GPS Candidate:\t${candidate ? `${candidate.recordType}/${candidate.encoding}/@${candidate.offset}` : 'none'}`,
@@ -400,7 +498,7 @@ async function generateForDat(filePath, outDir) {
   return {
     dat: filePath,
     outputs: [csvPath, kmlPath, tombPath],
-    gpsPoints: gpsPoints.length,
+    gpsPoints: kmlGpsPoints.length,
     candidate: candidate ? `${candidate.recordType}/${candidate.encoding}/@${candidate.offset}` : 'none',
     candidateTrusted: Boolean(trustedCandidate),
     inputSize: inputStat.size

@@ -831,6 +831,129 @@ function isPlausibleLatLon(lat, lon) {
   return true
 }
 
+function reduceKmlTrackPoints(points, targetMaxPoints = 250) {
+  if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points.slice() : []
+  if (points.length <= targetMaxPoints) return points.slice()
+
+  function applyMinDistance(minDistance) {
+    const reduced = [points[0]]
+    let last = points[0]
+
+    for (let i = 1; i < points.length - 1; i += 1) {
+      const p = points[i]
+      const d = Math.hypot(p.lat - last.lat, p.lon - last.lon)
+      if (d >= minDistance) {
+        reduced.push(p)
+        last = p
+      }
+    }
+
+    const lastPoint = points[points.length - 1]
+    const prev = reduced[reduced.length - 1]
+    if (prev !== lastPoint) reduced.push(lastPoint)
+    return reduced
+  }
+
+  let maxStep = 0
+  for (let i = 1; i < points.length; i += 1) {
+    const d = Math.hypot(points[i].lat - points[i - 1].lat, points[i].lon - points[i - 1].lon)
+    if (d > maxStep) maxStep = d
+  }
+
+  let lo = 0
+  let hi = Math.max(maxStep, 1e-7)
+  let best = points.slice()
+
+  for (let iter = 0; iter < 24; iter += 1) {
+    const mid = (lo + hi) / 2
+    const candidate = applyMinDistance(mid)
+    if (candidate.length > targetMaxPoints) {
+      lo = mid
+    } else {
+      best = candidate
+      hi = mid
+    }
+  }
+
+  return best
+}
+
+function cleanKmlTrackPoints(points) {
+  if (!Array.isArray(points) || points.length === 0) return []
+
+  const src = points.filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon))
+  if (src.length <= 2) return src.slice()
+
+  // 1) Normalize altitude and keep values in realistic range.
+  const normalized = src.map((p, i) => {
+    let altitude = Number.isFinite(p.altitude) ? p.altitude : null
+    if (altitude != null && (altitude < -200 || altitude > 12000)) altitude = null
+
+    if (altitude == null) {
+      const prev = i > 0 && Number.isFinite(src[i - 1].altitude) ? src[i - 1].altitude : null
+      const next = i + 1 < src.length && Number.isFinite(src[i + 1].altitude) ? src[i + 1].altitude : null
+      if (prev != null && next != null) altitude = (prev + next) / 2
+      else if (prev != null) altitude = prev
+      else if (next != null) altitude = next
+      else altitude = 0
+    }
+
+    return { lat: p.lat, lon: p.lon, altitude }
+  })
+
+  // 2) Collapse near-duplicate XY points that often create vertical columns in Google Earth.
+  const deduped = []
+  const dedupeEps = 2e-6 // ~0.2m
+  for (const p of normalized) {
+    const last = deduped[deduped.length - 1]
+    if (!last) {
+      deduped.push({ ...p })
+      continue
+    }
+
+    const d = Math.hypot(p.lat - last.lat, p.lon - last.lon)
+    if (d <= dedupeEps) {
+      last.altitude = (last.altitude + p.altitude) / 2
+    } else {
+      deduped.push({ ...p })
+    }
+  }
+
+  if (deduped.length <= 2) return deduped
+
+  // 3) Suppress single-point altitude spikes (up/down) that make "needles".
+  const cleaned = deduped.map((p) => ({ ...p }))
+  const spikeThreshold = 12 // meters
+  for (let i = 1; i < cleaned.length - 1; i += 1) {
+    const prev = cleaned[i - 1]
+    const curr = cleaned[i]
+    const next = cleaned[i + 1]
+
+    const dPrev = Math.abs(curr.altitude - prev.altitude)
+    const dNext = Math.abs(curr.altitude - next.altitude)
+    const baseline = Math.abs(next.altitude - prev.altitude)
+    if (dPrev > spikeThreshold && dNext > spikeThreshold && baseline < spikeThreshold / 3) {
+      curr.altitude = (prev.altitude + next.altitude) / 2
+    }
+  }
+
+  return cleaned
+}
+
+function dropZeroAltitudeInterior(points) {
+  if (!Array.isArray(points) || points.length <= 2) return Array.isArray(points) ? points.slice() : []
+
+  const lastIndex = points.length - 1
+  const filtered = points.filter((p, i) => {
+    if (i === 0 || i === lastIndex) return true
+    const alt = Number.isFinite(p?.altitude) ? p.altitude : 0
+    return Math.abs(alt) > 1e-6
+  })
+
+  // Keep original track if filtering is too aggressive.
+  return filtered.length >= 2 ? filtered : points.slice()
+}
+
 function updateCoordinateTrack(track, lat, lon) {
   if (!isPlausibleLatLon(lat, lon)) return
   track.n += 1
@@ -1082,7 +1205,7 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
         continue
       }
 
-      const totalLen = buffer[pos + 1]
+      const totalLen = buffer.readUInt16LE(pos + 1)
       if (totalLen < minRecLen || pos + totalLen > dataLen) {
         pos += 1
         continue
@@ -1129,7 +1252,9 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
           payload[i] = buffer[payloadStart + i] ^ xorKey
         }
 
-        if ((recordType === 2096 || recordType === 2097 || recordType === 2098) && payloadLen >= 66) {
+        // DJI DAT V3 GPS track aligns best with record type 2096.
+        // Including sibling types introduces noisy duplicates and zero altitude rows.
+        if (recordType === 2096 && payloadLen >= 66) {
           dateRaw = payload.readUInt32LE(0)
           timeRaw = payload.readUInt32LE(4)
           const lon = payload.readInt32LE(8) / 1e7
@@ -1298,15 +1423,42 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
     }
   }
 
-  const startPoint = gpsPoints[0] || null
-  const endPoint = gpsPoints.length > 0 ? gpsPoints[gpsPoints.length - 1] : null
-  const startCoordinateText = startPoint
-    ? `${startPoint.lon.toFixed(7)},${startPoint.lat.toFixed(7)},${(startPoint.altitude ?? 0).toFixed(2)}`
-    : ''
-  const endCoordinateText = endPoint
-    ? `${endPoint.lon.toFixed(7)},${endPoint.lat.toFixed(7)},${(endPoint.altitude ?? 0).toFixed(2)}`
-    : ''
-  const pathCoordinatesText = gpsPoints
+  const kmlSourcePoints = cleanKmlTrackPoints(gpsPoints)
+  const kmlFilteredPoints = dropZeroAltitudeInterior(kmlSourcePoints)
+  const kmlGpsPoints = reduceKmlTrackPoints(kmlFilteredPoints, 250)
+
+  const startPoint = kmlGpsPoints[0] || null
+  const endPoint = kmlGpsPoints.length > 0 ? kmlGpsPoints[kmlGpsPoints.length - 1] : null
+  // Build marker polygons in the same style as vendor KML (offset by 0.0001 deg).
+  const makeStartMarkerCoords = (center, alt) => {
+    if (!center) return ''
+    const delta = 0.0001
+    const alt2 = alt.toFixed(2)
+    return [
+      `${(center.lon + delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+      `${(center.lon - delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+      `${(center.lon - delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`,
+      `${(center.lon + delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`
+    ].join(' ')
+  }
+
+  const makeEndMarkerCoords = (center, alt) => {
+    if (!center) return ''
+    const delta = 0.0001
+    const alt2 = alt.toFixed(2)
+    return [
+      `${(center.lon - delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`,
+      `${(center.lon - delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+      `${(center.lon + delta).toFixed(7)},${(center.lat + delta).toFixed(7)},${alt2}`,
+      `${(center.lon + delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`,
+      `${(center.lon - delta).toFixed(7)},${(center.lat - delta).toFixed(7)},${alt2}`
+    ].join(' ')
+  }
+
+  const startRectangleText = startPoint ? makeStartMarkerCoords(startPoint, startPoint.altitude ?? 0) : ''
+  const endRectangleText = endPoint ? makeEndMarkerCoords(endPoint, endPoint.altitude ?? 0) : ''
+  
+  const pathCoordinatesText = kmlGpsPoints
     .map((p) => `${p.lon.toFixed(7)},${p.lat.toFixed(7)},${(p.altitude ?? 0).toFixed(2)}`)
     .join(' ')
   const pathStyleId = buildKmlStyleId(base)
@@ -1342,7 +1494,7 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
     '      <extrude>0</extrude>',
     '      <tessellate>0</tessellate>',
     '      <altitudeMode>clampToGround</altitudeMode>',
-    `      <coordinates>${startCoordinateText}</coordinates>`,
+    `      <coordinates>${startRectangleText}</coordinates>`,
     '    </LineString>',
     '  </Placemark>',
     '  <Placemark>',
@@ -1353,7 +1505,7 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
     '      <extrude>0</extrude>',
     '      <tessellate>0</tessellate>',
     '      <altitudeMode>clampToGround</altitudeMode>',
-    `      <coordinates>${endCoordinateText}</coordinates>`,
+    `      <coordinates>${endRectangleText}</coordinates>`,
     '    </LineString>',
     '  </Placemark>',
     '  <Placemark>',
@@ -1389,8 +1541,8 @@ async function parseDatAndGenerateArtifacts(filePath, outDir, base, stem, inputS
     `Total entries:\t\t${totalEntries.toLocaleString()}`,
     `Processed entries:\t${processedEntries.toLocaleString()}`,
     `Takeoff Altitude:\t${startPoint?.altitude != null ? startPoint.altitude.toFixed(2) : 0}`,
-    `KML Fixed Points:\t${gpsPoints.length > 0 ? 2 : 0}`,
-    `KML Path Points:\t${gpsPoints.length}`,
+    `KML Fixed Points:\t${kmlGpsPoints.length > 0 ? 2 : 0}`,
+    `KML Path Points:\t${kmlGpsPoints.length}`,
     `Flight Start Point:\t${startPoint ? `${startPoint.lat.toFixed(7)},${startPoint.lon.toFixed(7)}` : ''}`,
     `Flight End Point:\t${endPoint ? `${endPoint.lat.toFixed(7)},${endPoint.lon.toFixed(7)}` : ''}`,
     'Homepoints:\t\t',
@@ -2520,6 +2672,31 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('serial:startAutoLoop', async (_event, payload) => {
+    try {
+      const { heartbeatPackets, versionPackets, intervalMs } = payload || {}
+      return serialService.startAutoLoop(heartbeatPackets, versionPackets, intervalMs)
+    } catch (error) {
+      throw new Error(`Start auto loop failed: ${error.message}`)
+    }
+  })
+
+  ipcMain.handle('serial:stopAutoLoop', async () => {
+    try {
+      return serialService.stopAutoLoop()
+    } catch (error) {
+      throw new Error(`Stop auto loop failed: ${error.message}`)
+    }
+  })
+
+  ipcMain.handle('serial:getAutoLoopStatus', async () => {
+    try {
+      return serialService.getAutoLoopStatus()
+    } catch (error) {
+      throw new Error(`Get auto loop status failed: ${error.message}`)
+    }
+  })
+
   // Setup event forwarding from serial service to renderer
   serialService.on('data', (data) => {
     BrowserWindow.getAllWindows().forEach(window => {
@@ -2565,6 +2742,30 @@ app.whenReady().then(async () => {
     BrowserWindow.getAllWindows().forEach(window => {
       try {
         window.webContents.send('serial:urbBulkError', data)
+      } catch {}
+    })
+  })
+
+  serialService.on('auto-loop-state', (data) => {
+    BrowserWindow.getAllWindows().forEach(window => {
+      try {
+        window.webContents.send('serial:autoLoopState', data)
+      } catch {}
+    })
+  })
+
+  serialService.on('auto-loop-tick', (data) => {
+    BrowserWindow.getAllWindows().forEach(window => {
+      try {
+        window.webContents.send('serial:autoLoopTick', data)
+      } catch {}
+    })
+  })
+
+  serialService.on('auto-loop-error', (data) => {
+    BrowserWindow.getAllWindows().forEach(window => {
+      try {
+        window.webContents.send('serial:autoLoopError', data)
       } catch {}
     })
   })

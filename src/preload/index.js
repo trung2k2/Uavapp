@@ -83,6 +83,9 @@ const api = {
     sendUrbBulk: (hexData, busNumber = 1, deviceNumber = 4, endpoint = 0x85) => ipcRenderer.invoke('serial:sendUrbBulk', { hexData, busNumber, deviceNumber, endpoint }),
     sendMultiple: (packets, delayMs = 0) => ipcRenderer.invoke('serial:sendMultiple', { packets, delayMs }),
     getStatus: () => ipcRenderer.invoke('serial:getStatus'),
+    startAutoLoop: (heartbeatPackets, versionPackets, intervalMs = 200) => ipcRenderer.invoke('serial:startAutoLoop', { heartbeatPackets, versionPackets, intervalMs }),
+    stopAutoLoop: () => ipcRenderer.invoke('serial:stopAutoLoop'),
+    getAutoLoopStatus: () => ipcRenderer.invoke('serial:getAutoLoopStatus'),
     // Event listeners for serial communication
     onData: (cb) => {
       const listener = (_e, data) => cb(data)
@@ -113,6 +116,21 @@ const api = {
       const listener = (_e, data) => cb(data)
       ipcRenderer.on('serial:urbBulkError', listener)
       return () => ipcRenderer.removeListener('serial:urbBulkError', listener)
+    },
+    onAutoLoopState: (cb) => {
+      const listener = (_e, data) => cb(data)
+      ipcRenderer.on('serial:autoLoopState', listener)
+      return () => ipcRenderer.removeListener('serial:autoLoopState', listener)
+    },
+    onAutoLoopTick: (cb) => {
+      const listener = (_e, data) => cb(data)
+      ipcRenderer.on('serial:autoLoopTick', listener)
+      return () => ipcRenderer.removeListener('serial:autoLoopTick', listener)
+    },
+    onAutoLoopError: (cb) => {
+      const listener = (_e, data) => cb(data)
+      ipcRenderer.on('serial:autoLoopError', listener)
+      return () => ipcRenderer.removeListener('serial:autoLoopError', listener)
     }
   }
 }

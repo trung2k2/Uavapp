@@ -1,17 +1,17 @@
 {
-  "generatedAt": "2026-03-02T09:26:57.376Z",
+  "generatedAt": "2026-03-22T10:16:59.286Z",
   "results": [
     {
-      "dat": "D:\\Drone_Data\\Drone_Data\\DATFile\\FLY002.DAT",
+      "dat": "E:\\DJI_LUA\\Drone_Data - V1\\DATFile\\FLY021.DAT",
       "outputs": [
-        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002.DAT.csv",
-        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002.DAT.kml",
-        "D:\\Drone_Data\\Drone_Data\\outputfile\\FLY002-tombstone.txt"
+        "E:\\DJI_LUA\\Drone_Data - V1\\outputfile\\FLY021.DAT.csv",
+        "E:\\DJI_LUA\\Drone_Data - V1\\outputfile\\FLY021.DAT.kml",
+        "E:\\DJI_LUA\\Drone_Data - V1\\outputfile\\FLY021-tombstone.txt"
       ],
-      "gpsPoints": null,
-      "candidate": "datcon",
-      "candidateTrusted": true,
-      "inputSize": 203574001
+      "gpsPoints": 17,
+      "candidate": "none",
+      "candidateTrusted": false,
+      "inputSize": 40128512
     }
   ]
 }

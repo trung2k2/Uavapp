@@ -11,6 +11,13 @@ class SerialService extends EventEmitter {
     this.port = null
     this.isOpen = false
     this.isConnecting = false
+    this.autoLoopTimer = null
+    this.autoLoopBusy = false
+    this.autoLoopStep = 0
+    this.autoHeartbeatIndex = 0
+    this.autoVersionIndex = 0
+    this.autoLoopConfig = null
+    this.autoLoopCycles = 0
   }
 
   /**
@@ -97,6 +104,7 @@ class SerialService extends EventEmitter {
       })
 
       this.port.on('close', () => {
+        this.stopAutoLoop()
         this.isOpen = false
         this.emit('disconnected', { timestamp: Date.now() })
       })
@@ -114,6 +122,8 @@ class SerialService extends EventEmitter {
     if (!this.port || !this.isOpen) {
       throw new Error('Not connected to any port')
     }
+
+    this.stopAutoLoop()
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -301,6 +311,121 @@ class SerialService extends EventEmitter {
       isOpen: this.isOpen,
       isConnecting: this.isConnecting,
       path: this.port?.path || null,
+      timestamp: Date.now()
+    }
+  }
+
+  startAutoLoop(heartbeatPackets = [], versionPackets = [], intervalMs = 200) {
+    if (!this.port || !this.isOpen) {
+      throw new Error('Serial port is not open')
+    }
+    if (!Array.isArray(heartbeatPackets) || heartbeatPackets.length === 0) {
+      throw new Error('heartbeatPackets must be a non-empty array')
+    }
+    if (!Array.isArray(versionPackets) || versionPackets.length === 0) {
+      throw new Error('versionPackets must be a non-empty array')
+    }
+
+    this.stopAutoLoop()
+
+    this.autoLoopConfig = {
+      heartbeatPackets,
+      versionPackets,
+      intervalMs: Math.max(50, Number(intervalMs) || 200)
+    }
+    this.autoLoopBusy = false
+    this.autoLoopStep = 0
+    this.autoHeartbeatIndex = 0
+    this.autoVersionIndex = 0
+    this.autoLoopCycles = 0
+
+    this.emit('auto-loop-state', {
+      active: true,
+      intervalMs: this.autoLoopConfig.intervalMs,
+      cycles: this.autoLoopCycles,
+      timestamp: Date.now()
+    })
+
+    this.autoLoopTimer = setInterval(async () => {
+      if (this.autoLoopBusy || !this.isOpen || !this.autoLoopConfig) return
+
+      this.autoLoopBusy = true
+      try {
+        const step = this.autoLoopStep % 8
+        let hexData = ''
+        let tag = ''
+
+        if (step < 7) {
+          const idx = this.autoHeartbeatIndex % this.autoLoopConfig.heartbeatPackets.length
+          hexData = this.autoLoopConfig.heartbeatPackets[idx]
+          this.autoHeartbeatIndex += 1
+          tag = `heartbeat ${step + 1}/7`
+        } else {
+          const idx = this.autoVersionIndex % this.autoLoopConfig.versionPackets.length
+          hexData = this.autoLoopConfig.versionPackets[idx]
+          this.autoVersionIndex += 1
+          tag = 'version-inquiry 1/1'
+        }
+
+        await this.sendUrbBulk(hexData)
+
+        this.autoLoopStep += 1
+        if (this.autoLoopStep % 8 === 0) {
+          this.autoLoopCycles += 1
+          this.emit('auto-loop-state', {
+            active: true,
+            intervalMs: this.autoLoopConfig.intervalMs,
+            cycles: this.autoLoopCycles,
+            timestamp: Date.now()
+          })
+        }
+
+        this.emit('auto-loop-tick', {
+          tag,
+          step: this.autoLoopStep,
+          cycles: this.autoLoopCycles,
+          timestamp: Date.now()
+        })
+      } catch (error) {
+        this.emit('auto-loop-error', {
+          message: error?.message || String(error),
+          timestamp: Date.now()
+        })
+      } finally {
+        this.autoLoopBusy = false
+      }
+    }, this.autoLoopConfig.intervalMs)
+
+    return this.getAutoLoopStatus()
+  }
+
+  stopAutoLoop() {
+    if (this.autoLoopTimer) {
+      clearInterval(this.autoLoopTimer)
+      this.autoLoopTimer = null
+    }
+
+    const wasActive = !!this.autoLoopConfig
+    this.autoLoopBusy = false
+    this.autoLoopConfig = null
+
+    if (wasActive) {
+      this.emit('auto-loop-state', {
+        active: false,
+        intervalMs: 200,
+        cycles: this.autoLoopCycles,
+        timestamp: Date.now()
+      })
+    }
+
+    return this.getAutoLoopStatus()
+  }
+
+  getAutoLoopStatus() {
+    return {
+      active: !!this.autoLoopConfig,
+      intervalMs: this.autoLoopConfig?.intervalMs || 200,
+      cycles: this.autoLoopCycles,
       timestamp: Date.now()
     }
   }
