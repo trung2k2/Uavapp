@@ -65,10 +65,8 @@ const api = {
     ipcRenderer.on('ftp:downloadAll:error', listener)
     return () => ipcRenderer.removeListener('ftp:downloadAll:error', listener)
   },
-  // Decrypt .DAT file into csv/kml/tombstone
-  decryptDat: (filePath, outputDir = null) => ipcRenderer.invoke('decrypt:dat', { filePath, outputDir }),
-  // Decrypt .DAT with DatCon-style parser from src_datcon flow
-  decryptDatCon: (filePath, outputDir = null) => ipcRenderer.invoke('decrypt:datcon', { filePath, outputDir }),
+  // Decrypt .DAT with DatCon Java bridge
+  decryptDatCon: (filePath, outputDir = null, options = null) => ipcRenderer.invoke('decrypt:datcon', { filePath, outputDir, options }),
   // Open folder picker dialog (generic)
   chooseFolder: () => ipcRenderer.invoke('dialog:chooseFolder'),
   // Open folder picker and return all .DAT file paths inside

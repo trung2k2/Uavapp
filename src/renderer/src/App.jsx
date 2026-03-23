@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import DecryptTab from './components/DecryptTab'
 import DecryptDatConTab from './components/DecryptDatConTab'
 import SerialTab from './components/SerialTab'
-import { IconDroneLogs, IconDecrypt, IconDatCon, IconSerial, IconDroneLarge } from './components/Icons'
+import { IconDroneLogs, IconDatCon, IconSerial, IconDroneLarge } from './components/Icons'
 
 const FTPTABS = [
   { id: 'logs',    label: 'Drone Logs',        Icon: IconDroneLogs },
-  { id: 'decrypt', label: 'Drone Data Decrypt', Icon: IconDecrypt },
   { id: 'decrypt-datcon', label: 'DatCon Decrypt', Icon: IconDatCon },
   { id: 'serial',  label: 'Serial/USB',         Icon: IconSerial },
 ]
@@ -298,8 +296,6 @@ function App() {
       <div className="appContent">
 
       {activeTab === 'serial' && <SerialTab />}
-
-      {activeTab === 'decrypt' && <DecryptTab />}
 
       {activeTab === 'decrypt-datcon' && <DecryptDatConTab />}
 

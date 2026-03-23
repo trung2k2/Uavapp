@@ -49,23 +49,6 @@ export function IconDroneLogs({ size = 20, color = 'currentColor' }) {
   )
 }
 
-/** File with arrow out = Decrypt tab */
-export function IconDecrypt({ size = 20, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      {/* file shape */}
-      <path d="M4 3 L4 21 L15 21 L15 9 L10 3 Z"/>
-      <path d="M10 3 L10 9 L15 9"/>
-      {/* horizontal lines on file */}
-      <line x1="7" y1="13" x2="11" y2="13"/>
-      <line x1="7" y1="16" x2="10" y2="16"/>
-      {/* export arrow */}
-      <line x1="17" y1="13" x2="23" y2="13"/>
-      <polyline points="20,10 23,13 20,16"/>
-    </svg>
-  )
-}
-
 /** DatCon-style decrypt icon */
 export function IconDatCon({ size = 20, color = 'currentColor' }) {
   return (

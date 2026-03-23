@@ -473,6 +473,43 @@ code {
   margin-top: 4px;
 }
 
+.altMeterWrap {
+  margin-top: 8px;
+  border: 1px solid #e7ecf3;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 6px 8px;
+}
+
+.altMeterHead,
+.altMeterMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #4b5a70;
+}
+
+.altMeterDetail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #607087;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.altMeterTrack {
+  margin: 5px 0;
+  height: 8px;
+  border-radius: 999px;
+  background: #e4edf8;
+  overflow: hidden;
+}
+
+.altMeterFill {
+  height: 100%;
+  background: linear-gradient(90deg, #2d7ff9 0%, #23b1a5 100%);
+}
+
 .decryptOutputList {
   display: flex;
   flex-direction: column;

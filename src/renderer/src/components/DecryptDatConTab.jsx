@@ -10,6 +10,11 @@ function formatBytes(b) {
   return b + ' B'
 }
 
+function formatMeters(v) {
+  if (!Number.isFinite(v)) return '-'
+  return `${v.toFixed(1)} m`
+}
+
 export default function DecryptDatConTab() {
   const [files, setFiles] = useState([])
   const [outputDir, setOutputDir] = useState('')
@@ -34,7 +39,9 @@ export default function DecryptDatConTab() {
           status: 'idle',
           outputs: [],
           error: null,
-          engine: null
+          engine: null,
+          altitude: null,
+          profile: null
         }))
       return [...prev, ...toAdd]
     })
@@ -69,7 +76,9 @@ export default function DecryptDatConTab() {
               status: 'done',
               outputs: Array.isArray(result?.outputs) ? result.outputs : [],
               size: result?.inputSize ?? x.size,
-              engine: result?.engine || 'src_datcon'
+              engine: result?.engine || 'datcon_java_bridge',
+              altitude: result?.altitude || null,
+              profile: result?.profile || null
             }
           : x)))
       } catch (err) {
@@ -87,6 +96,8 @@ export default function DecryptDatConTab() {
 
   const hasPending = files.some((f) => f.status === 'idle' || f.status === 'error')
   const doneCount = files.filter((f) => f.status === 'done').length
+  const profile4Count = files.filter((f) => f?.profile?.kmlMode === 'profile').length
+  const groundTrackCount = files.filter((f) => f?.profile?.kmlMode === 'groundtrack').length
 
   return (
     <div className="decryptShell">
@@ -107,8 +118,8 @@ export default function DecryptDatConTab() {
         <div className="decryptToolbarRight">
           <div className="outDirLabel">
             {outputDir
-              ? <span>Engine: DatCon (src_datcon) • {outputDir.split(/[/\\]/).filter(Boolean).slice(-1)[0]}</span>
-              : <span style={{ color: '#6b6b6b' }}>Engine: DatCon (src_datcon) • Output: same folder as .DAT</span>}
+              ? <span>Engine: DatCon (java_bridge) • Auto mode • {outputDir.split(/[/\\]/).filter(Boolean).slice(-1)[0]}</span>
+              : <span style={{ color: '#6b6b6b' }}>Engine: DatCon (java_bridge) • Auto mode • Output: same folder as .DAT</span>}
           </div>
           <button
             className="smallBtn"
@@ -130,6 +141,8 @@ export default function DecryptDatConTab() {
         <div className="decryptSummary">
           <span>{files.length} file{files.length > 1 ? 's' : ''}</span>
           {doneCount > 0 && <span className="summaryDone">✓ {doneCount} done</span>}
+          {groundTrackCount > 0 && <span className="summaryDone">Ground Track: {groundTrackCount}</span>}
+          {profile4Count > 0 && <span className="summaryDone">Profile 4m: {profile4Count}</span>}
           {files.filter((f) => f.status === 'error').length > 0 && (
             <span className="summaryErr">✗ {files.filter((f) => f.status === 'error').length} error</span>
           )}
@@ -141,7 +154,10 @@ export default function DecryptDatConTab() {
           <div className="decryptEmpty">
             <div className="decryptEmptyIcon">🧩</div>
             <div className="decryptEmptyTitle">DatCon-style decrypt tab</div>
-            <div className="decryptEmptyHint">This tab uses the src_datcon decrypt behavior (tick-based payload XOR).</div>
+            <div className="decryptEmptyHint">This tab uses DatCon Java bridge (DatConCliBridge) for export.</div>
+            <div className="decryptEmptyHint" style={{ marginTop: 4 }}>
+              Auto mode: relativeHeightRange &lt; 4m =&gt; Ground, otherwise Profile 4m.
+            </div>
             <div className="decryptEmptyHint" style={{ marginTop: 4 }}>
               Each .DAT will generate: <code>.csv</code> · <code>.kml</code> · <code>-tombstone.txt</code>
             </div>
@@ -157,6 +173,21 @@ export default function DecryptDatConTab() {
                 <div className="decryptRowName">{f.name}</div>
                 <div className="decryptRowPath">{f.path}</div>
                 {f.status === 'error' && <div className="decryptRowError">{f.error}</div>}
+                {f.status === 'done' && f.profile && (
+                  <div className="altMeterWrap">
+                    <div className="altMeterHead">
+                      <span>Profile (meters)</span>
+                      <span>{f.profile.kmlMode === 'groundtrack' ? 'Ground Track' : `${f.profile.profileMeters || 4} m`}</span>
+                    </div>
+                    <div className="altMeterMeta">
+                      <span>relativeHeightRange {formatMeters(f.profile.relativeHeightRangeM)}</span>
+                      <span>{String(f.profile.reason || '')} • {String(f.profile.relativeHeightSource || 'none')}</span>
+                    </div>
+                    <div className="altMeterDetail">
+                      relativeHeightRange = {formatMeters(f.profile.maxRelativeHeightM)} - {formatMeters(f.profile.minRelativeHeightM)}
+                    </div>
+                  </div>
+                )}
                 {f.status === 'done' && f.outputs.length > 0 && (
                   <div className="decryptOutputList">
                     {f.outputs.map((o) => (
